@@ -1,0 +1,15 @@
+[package]
+name = "wexec"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+futures = "0.3.31"
+slotmap = "1.0.7"
+winit = "0.30.8"
+
+[dev-dependencies]
+anyhow = "1.0.95"
+pollster = "0.4.0"
+vello = "0.3.0"
+wgpu = "24.0.0"
