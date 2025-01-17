@@ -2,47 +2,36 @@ use std::{cell::RefCell, future::{Future, IntoFuture}, mem, task::{Context, Poll
 
 use futures::future::LocalBoxFuture;
 use slotmap::{HopSlotMap, SparseSecondaryMap};
-use winit::{application::ApplicationHandler, event_loop::{ActiveEventLoop, EventLoopProxy}};
+use winit::{application::ApplicationHandler, event::StartCause, event_loop::{ActiveEventLoop, EventLoopProxy}};
 
 use crate::task::{waker_for_task, Task, TaskID};
 
 pub(crate) struct ExecutorHandler {
     /// Event loop proxy, used for creating wakers.
     proxy: EventLoopProxy<ExecutorEvent>,
-    /// Slot map of pending futures.
-    pending: HopSlotMap<TaskID, Task>,
-    /// Set of futures that have already been polled this iteration.
-    polled: SparseSecondaryMap<TaskID, ()>,
     /// The state of the main task.
     main_task: MainTaskState,
+    /// Slot map of pending futures.
+    pending: HopSlotMap<TaskID, Task>,
 }
 
 impl ExecutorHandler {
     /// Polls the pending task with the given ID.
     fn poll_task_by_id(&mut self, id: TaskID, event_loop: &ActiveEventLoop) -> bool {
-        let waker = waker_for_task(&self.proxy, id);
-        let mut context = Context::from_waker(&waker);
-
-        let complete = match self.pending[id].poll(&mut context) {
-            Poll::Ready(_) => {
-                self.pending.remove(id);
-                true
-            }
-            Poll::Pending => false,
-        };
-
-        if let MainTaskState::Active(main_id) = &self.main_task {
-            // Shut down once the main future completes.
-            if complete && id == *main_id {
-                event_loop.exit();
-            }
-        }
-
-        complete
+        todo!()
     }
 }
 
 impl ApplicationHandler<ExecutorEvent> for ExecutorHandler {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        match cause {
+            StartCause::ResumeTimeReached { start, requested_resume } => todo!(),
+            StartCause::WaitCancelled { start, requested_resume } => todo!(),
+            StartCause::Poll => todo!(),
+            StartCause::Init => todo!(),
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let task_gen = match mem::take(&mut self.main_task) {
             MainTaskState::Waiting(task_gen) => task_gen,
@@ -77,21 +66,13 @@ impl ApplicationHandler<ExecutorEvent> for ExecutorHandler {
     ) {
         match event {
             ExecutorEvent::PollTask(id) => {
-                if self.polled.insert(id, ()).is_none() {
-                    self.poll_task_by_id(id, &event_loop);
-                }
-            }
+                self.poll_task_by_id(id, event_loop);
+            },
             ExecutorEvent::NewTask(task) => {
                 let id = self.pending.insert(task);
-                if self.polled.insert(id, ()).is_none() {
-                    self.poll_task_by_id(id, &event_loop);
-                }
-            }
+                self.poll_task_by_id(id, event_loop);
+            },
         }
-    }
-
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.polled.clear();
     }
 }
 
@@ -106,13 +87,4 @@ enum MainTaskState {
     Empty,
     Waiting(Box<dyn FnOnce() -> LocalBoxFuture<'static, ()>>),
     Active(TaskID)
-}
-
-struct ExecContext {
-    active_event_loop: *const ActiveEventLoop,
-    id: TaskID
-}
-
-thread_local! {
-    static EXEC_CTX: RefCell<Option<ExecContext>> = RefCell::new(None);
 }
