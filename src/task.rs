@@ -9,7 +9,7 @@ use winit::event_loop::EventLoopProxy;
 use crate::executor::ExecutorEvent;
 
 slotmap::new_key_type! {
-    pub(crate) struct TaskID;
+    pub(crate) struct TaskId;
 }
 
 pub(crate) struct Task {
@@ -22,7 +22,8 @@ impl Task {
     }
 }
 
-pub(crate) fn waker_for_task(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskID) -> Waker {
+/// Creates a waker for the given task.
+pub(crate) fn id_waker(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskId) -> Waker {
     let data = Box::new(EventLoopWakerData {
         proxy: proxy.clone(),
         id,
@@ -33,7 +34,7 @@ pub(crate) fn waker_for_task(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskID) 
 #[derive(Clone)]
 struct EventLoopWakerData {
     proxy: EventLoopProxy<ExecutorEvent>,
-    id: TaskID,
+    id: TaskId,
 }
 
 unsafe fn elw_clone(this: *const ()) -> RawWaker {
@@ -52,7 +53,7 @@ unsafe fn elw_wake(this: *const ()) {
 unsafe fn elw_wake_by_ref(this: *const ()) {
     // SAFETY: `this` will always be a valid pointer to EventLoopWakerData.
     let this = &mut *(this as *mut EventLoopWakerData);
-    let _ = this.proxy.send_event(ExecutorEvent::PollTask(this.id));
+    let _ = this.proxy.send_event(ExecutorEvent::Wake(this.id));
 }
 
 unsafe fn elw_drop(this: *const ()) {
