@@ -1,7 +1,12 @@
 use std::{
-    cell::{Cell, Ref, RefCell}, collections::{HashMap, VecDeque}, future::{Future, IntoFuture}, mem::{self, ManuallyDrop}, pin::Pin, rc::Rc, task::{Context, Poll, Waker}
+    cell::{Cell, RefCell},
+    future::{Future, IntoFuture},
+    mem::{self, ManuallyDrop},
+    rc::Rc,
+    task::{Context, Poll},
 };
 
+use ahash::AHashMap;
 use futures::{future::LocalBoxFuture, FutureExt as _};
 use slotmap::HopSlotMap;
 use winit::{
@@ -10,7 +15,6 @@ use winit::{
     event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
     window::WindowId,
 };
-use ahash::AHashMap;
 
 use crate::{context::RuntimeGuard, waker::id_waker};
 
@@ -30,7 +34,10 @@ pub(crate) struct Executor {
 }
 
 impl Executor {
-    pub(crate) fn new<IntoFut, Fut>(event_loop: &EventLoop<ExecutorEvent>, future_src: IntoFut) -> Self
+    pub(crate) fn new<IntoFut, Fut>(
+        event_loop: &EventLoop<ExecutorEvent>,
+        future_src: IntoFut,
+    ) -> Self
     where
         IntoFut: IntoFuture<Output = (), IntoFuture = Fut> + 'static,
         Fut: Future<Output = ()> + 'static,
@@ -61,7 +68,7 @@ impl Executor {
     /// Polls the task with the given ID.
     fn poll_task(&mut self, id: TaskId, event_loop: &ActiveEventLoop) {
         let _rt_guard = RuntimeGuard::with(event_loop, &mut self.queues);
-        
+
         let waker = id_waker(&self.proxy, id);
         let mut context = Context::from_waker(&waker);
 
@@ -85,8 +92,8 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
                 // start and poll the main task
                 let id = self.main_id();
                 self.poll_task(id, event_loop);
-            },
-            _ => ()
+            }
+            _ => (),
         }
     }
 
@@ -127,8 +134,8 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
 pub(crate) struct ExecutorQueues {
     /// List of tasks waiting for the event loop to resume.
     pending_resume: Vec<(TaskId, CopyReturnHandle<()>)>,
-    /// Map of all tasks waiting for a window event. 
-    pending_window: AHashMap<WindowId, (TaskId, ReturnHandle<WindowEvent>)>
+    /// Map of all tasks waiting for a window event.
+    pending_window: AHashMap<WindowId, (TaskId, ReturnHandle<WindowEvent>)>,
 }
 
 impl ExecutorQueues {
@@ -151,7 +158,12 @@ impl ExecutorQueues {
 
     /// Arms `task` to be awoken when `window` receives an event.
     /// Only one task may await any given window's events at a time.
-    pub(crate) fn arm_window_task(&mut self, window: WindowId, task: TaskId, handle: ReturnHandle<WindowEvent>) {
+    pub(crate) fn arm_window_task(
+        &mut self,
+        window: WindowId,
+        task: TaskId,
+        handle: ReturnHandle<WindowEvent>,
+    ) {
         let mut insert_succeeded: bool = false;
         self.pending_window.entry(window).or_insert_with(|| {
             insert_succeeded = true;
@@ -163,11 +175,13 @@ impl ExecutorQueues {
     }
 
     /// Returns the task to awake for this window event, if there is one.
-    fn trip_window_task(&mut self, window: WindowId) -> Option<(TaskId, ReturnHandle<WindowEvent>)> {
+    fn trip_window_task(
+        &mut self,
+        window: WindowId,
+    ) -> Option<(TaskId, ReturnHandle<WindowEvent>)> {
         self.pending_window.remove(&window)
     }
 }
-
 
 slotmap::new_key_type! {
     pub(crate) struct TaskId;
@@ -214,9 +228,8 @@ impl MainTask {
 
     fn id(&self) -> TaskId {
         if let Self::Running(task_id) = self {
-            return *task_id
-        }
-        else {
+            return *task_id;
+        } else {
             panic!("The main task has not started");
         }
     }

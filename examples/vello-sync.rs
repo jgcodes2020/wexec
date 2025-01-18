@@ -91,7 +91,6 @@ impl ApplicationHandler for SimpleVelloApp<'_> {
         window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
-        println!("window {:?}: {:?}", &window_id, &event);
         // Ignore the event (return from the function) if
         //   - we have no render_state
         //   - OR the window id of the event doesn't match the window id of our render_state
@@ -162,10 +161,6 @@ impl ApplicationHandler for SimpleVelloApp<'_> {
             }
             _ => {}
         }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        println!("about to wait");
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, future::Future, marker::PhantomData, ptr::NonNull};
+use std::{cell::RefCell, marker::PhantomData, ptr::NonNull};
 
 use winit::event_loop::ActiveEventLoop;
 
@@ -22,18 +22,18 @@ impl RuntimeContext {
 }
 
 thread_local! {
-    pub(crate) static CURRENT_RT: RefCell<Option<RuntimeContext>> = RefCell::new(None);
+    static CURRENT_RT: RefCell<Option<RuntimeContext>> = RefCell::new(None);
 }
 
-pub(crate) fn is_wexec_thread() -> bool {
+pub(crate) fn is_main_thread() -> bool {
     CURRENT_RT.with_borrow(|value| value.is_some())
 }
 
-pub(crate) fn with_current_rt<F: FnOnce(&RuntimeContext)>(f: F) {
+pub(crate) fn with_current_rt<R, F: FnOnce(&RuntimeContext) -> R>(f: F) -> R {
     CURRENT_RT.with_borrow(|value| match value.as_ref() {
         Some(rt) => f(rt),
-        None => panic!("Not called from the `wexec` executor"),
-    });
+        None => panic!("Not running on the main thread"),
+    })
 }
 
 pub(crate) struct RuntimeGuard<'a>(PhantomData<&'a ()>);
@@ -62,6 +62,7 @@ impl<'a> Drop for RuntimeGuard<'a> {
             if current_rt.is_none() {
                 panic!("Runtime context was prematurely deleted!");
             }
+            *current_rt = None;
         })
     }
 }

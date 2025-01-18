@@ -1,12 +1,18 @@
-use std::{future::Future, pin::Pin, task::{self, Poll}};
+use std::{cell::{Cell, RefCell}, future::Future, pin::Pin, rc::Rc, task::{self, Poll}};
 
 use winit::{event::WindowEvent, window::WindowId};
 
-use crate::{context::with_current_rt, executor::{CopyReturnHandle, ReturnHandle}, waker::extract_waker_id};
+use crate::{context::{self, with_current_rt}, executor::{CopyReturnHandle, ReturnHandle}, waker::extract_waker_id};
 
 pub struct WindowEventFuture {
     window_id: WindowId,
     handle: ReturnHandle<WindowEvent>,
+}
+
+impl WindowEventFuture {
+    pub fn new(window_id: WindowId) -> Self {
+        Self { window_id, handle: Default::default() }
+    }
 }
 
 impl Future for WindowEventFuture {
@@ -18,7 +24,7 @@ impl Future for WindowEventFuture {
             None => {
                 let task_id = match extract_waker_id(cx.waker()) {
                     Some(id) => id,
-                    None => panic!("Only `wexec` futures may wait for window events"),
+                    None => panic!("Only main-thread futures may wait for window events"),
                 };
                 let return_handle = self.handle.clone();
                 with_current_rt(move |rt| {
@@ -34,6 +40,14 @@ pub struct ResumedFuture {
     handle: CopyReturnHandle<()>,
 }
 
+impl ResumedFuture {
+    #[must_use = "This future should be `.await`ed"]
+    pub fn new() -> Self {
+        debug_assert!(context::is_main_thread(), "resumed() should only be called from the main thread");
+        Self { handle: Default::default() }
+    }
+}
+
 impl Future for ResumedFuture {
     type Output = ();
 
@@ -43,7 +57,7 @@ impl Future for ResumedFuture {
             None => {
                 let task_id = match extract_waker_id(cx.waker()) {
                     Some(id) => id,
-                    None => panic!("Only `wexec` futures may wait for window events"),
+                    None => panic!("Only main-thread futures may wait for resume events"),
                 };
                 let return_handle = self.handle.clone();
                 with_current_rt(move |rt| {

@@ -1,24 +1,16 @@
-use std::{
-    cell::{Cell, RefCell},
-    future::{Future, IntoFuture},
-    marker::PhantomData,
-    pin::Pin,
-    ptr::NonNull,
-    sync::{LazyLock, OnceLock},
-};
+use std::future::{Future, IntoFuture};
 
+use context::with_current_rt;
 use executor::{Executor, ExecutorEvent};
-use send_wrapper::SendWrapper;
 use winit::{
     error::{EventLoopError, OsError},
-    event::WindowEvent,
-    event_loop::{ActiveEventLoop, EventLoop, EventLoopBuilder},
-    window::{Window, WindowAttributes, WindowId},
+    event_loop::{EventLoop, EventLoopBuilder}, window::{Window, WindowAttributes, WindowId},
 };
 
 mod context;
 mod executor;
-mod future;
+pub mod future;
+pub mod reexports;
 mod waker;
 
 
@@ -52,4 +44,18 @@ impl Runtime {
             }
         }
     }
+}
+
+pub fn resumed() -> future::ResumedFuture {
+    future::ResumedFuture::new()
+}
+
+pub fn create_window(attrs: WindowAttributes) -> Result<Window, OsError> {
+    with_current_rt(|rt| {
+        rt.event_loop().create_window(attrs)
+    })
+}
+
+pub fn window_event(window_id: WindowId) -> future::WindowEventFuture {
+    future::WindowEventFuture::new(window_id)
 }
