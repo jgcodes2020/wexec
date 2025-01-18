@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+ahash = "0.8.11"
 futures = "0.3.31"
 send_wrapper = "0.6.0"
 slotmap = "1.0.7"

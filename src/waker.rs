@@ -1,34 +1,27 @@
-use std::{
-    future::Future,
-    task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
-};
+use std::task::{RawWaker, RawWakerVTable, Waker};
 
-use futures::future::LocalBoxFuture;
 use winit::event_loop::EventLoopProxy;
 
-use crate::executor::ExecutorEvent;
+use crate::executor::{ExecutorEvent, TaskId};
 
-slotmap::new_key_type! {
-    pub(crate) struct TaskId;
-}
 
-pub(crate) struct Task {
-    pub(crate) future: LocalBoxFuture<'static, ()>,
-}
-
-impl Task {
-    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        self.future.as_mut().poll(cx)
-    }
-}
-
-/// Creates a waker for the given task.
+/// Creates an event-loop waker for the given task.
 pub(crate) fn id_waker(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskId) -> Waker {
     let data = Box::new(EventLoopWakerData {
         proxy: proxy.clone(),
         id,
     });
     unsafe { Waker::new(Box::into_raw(data) as *const (), &VTABLE) }
+}
+
+/// Extracts the [`TaskId`] from a Waker, if it is an event-loop waker.
+pub(crate) fn extract_waker_id(waker: &Waker) -> Option<TaskId> {
+    if waker.vtable() != &VTABLE {
+        return None;
+    }
+    // SAFETY: this vtable will always be associated with this event waker.
+    let waker_ptr = unsafe { &*(waker.data() as *const EventLoopWakerData) };
+    Some(waker_ptr.id)
 }
 
 #[derive(Clone)]

@@ -2,6 +2,7 @@ use std::{
     cell::{Cell, RefCell},
     future::{Future, IntoFuture},
     marker::PhantomData,
+    pin::Pin,
     ptr::NonNull,
     sync::{LazyLock, OnceLock},
 };
@@ -9,12 +10,17 @@ use std::{
 use executor::{Executor, ExecutorEvent};
 use send_wrapper::SendWrapper;
 use winit::{
-    error::EventLoopError,
-    event_loop::{EventLoop, EventLoopBuilder},
+    error::{EventLoopError, OsError},
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, EventLoop, EventLoopBuilder},
+    window::{Window, WindowAttributes, WindowId},
 };
 
+mod context;
 mod executor;
-mod task;
+mod future;
+mod waker;
+
 
 pub struct Runtime {
     event_loop: EventLoopBuilder<ExecutorEvent>,
