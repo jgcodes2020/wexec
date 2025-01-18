@@ -36,15 +36,13 @@ impl Future for WindowEventFuture {
     }
 }
 
-pub struct ResumedFuture {
-    handle: CopyReturnHandle<()>,
-}
+pub struct ResumedFuture(());
 
 impl ResumedFuture {
     #[must_use = "This future should be `.await`ed"]
     pub fn new() -> Self {
         debug_assert!(context::is_main_thread(), "resumed() should only be called from the main thread");
-        Self { handle: Default::default() }
+        Self(())
     }
 }
 
@@ -52,16 +50,51 @@ impl Future for ResumedFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        match self.handle.take() {
-            Some(_) => Poll::Ready(()),
-            None => {
+        let resumed = with_current_rt(|rt| {
+            rt.queues().is_resumed()
+        });
+        match resumed {
+            true => Poll::Ready(()),
+            false => {
+                let task_id = match extract_waker_id(cx.waker()) {
+                    Some(id) => id,
+                    None => panic!("Only main-thread futures may wait for suspend events"),
+                };
+                with_current_rt(move |rt| {
+                    rt.queues().queue_resume_task(task_id);
+                });
+                Poll::Pending
+            },
+        }
+    }
+}
+
+pub struct SuspendedFuture(());
+
+impl SuspendedFuture {
+    #[must_use = "This future should be `.await`ed"]
+    pub fn new() -> Self {
+        debug_assert!(context::is_main_thread(), "resumed() should only be called from the main thread");
+        Self(())
+    }
+}
+
+impl Future for SuspendedFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let resumed = with_current_rt(|rt| {
+            rt.queues().is_resumed()
+        });
+        match resumed {
+            false => Poll::Ready(()),
+            true => {
                 let task_id = match extract_waker_id(cx.waker()) {
                     Some(id) => id,
                     None => panic!("Only main-thread futures may wait for resume events"),
                 };
-                let return_handle = self.handle.clone();
                 with_current_rt(move |rt| {
-                    rt.queues().queue_resume_task(task_id, return_handle);
+                    rt.queues().queue_suspend_task(task_id);
                 });
                 Poll::Pending
             },

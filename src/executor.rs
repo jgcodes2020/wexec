@@ -98,8 +98,15 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        for (id, handle) in self.queues.drain_resume_tasks() {
-            handle.set(Some(()));
+        self.queues.set_resumed(true);
+        for id in self.queues.drain_resume_tasks() {
+            self.poll_task(id, event_loop);
+        }
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.queues.set_resumed(false);
+        for id in self.queues.drain_suspend_tasks() {
             self.poll_task(id, event_loop);
         }
     }
@@ -133,27 +140,51 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
 /// Task queues for event-loop events.
 pub(crate) struct ExecutorQueues {
     /// List of tasks waiting for the event loop to resume.
-    pending_resume: Vec<(TaskId, CopyReturnHandle<()>)>,
+    pending_resume: Vec<TaskId>,
+    /// List of tasks waiting for the event loop to suspend.
+    pending_suspend: Vec<TaskId>,
     /// Map of all tasks waiting for a window event.
     pending_window: AHashMap<WindowId, (TaskId, ReturnHandle<WindowEvent>)>,
+    /// True when the event loop resumes.
+    is_resumed: bool,
 }
 
 impl ExecutorQueues {
     fn new() -> Self {
         Self {
             pending_resume: Vec::with_capacity(4),
+            pending_suspend: Vec::with_capacity(4),
             pending_window: AHashMap::with_capacity(4),
+            is_resumed: false,
         }
     }
 
+    pub(crate) fn is_resumed(&self) -> bool {
+        self.is_resumed
+    }
+
+    fn set_resumed(&mut self, resumed: bool) {
+        self.is_resumed = resumed;
+    }
+
     /// Queues `task` to be woken up when the event loop resumes.
-    pub(crate) fn queue_resume_task(&mut self, task: TaskId, handle: CopyReturnHandle<()>) {
-        self.pending_resume.push((task, handle));
+    pub(crate) fn queue_resume_task(&mut self, task: TaskId) {
+        self.pending_resume.push(task);
     }
 
     /// Dequeues all tasks waiting for resume, returning them as an iterator.
-    fn drain_resume_tasks(&mut self) -> impl Iterator<Item = (TaskId, CopyReturnHandle<()>)> {
+    fn drain_resume_tasks(&mut self) -> impl Iterator<Item = TaskId> {
         mem::replace(&mut self.pending_resume, Vec::with_capacity(4)).into_iter()
+    }
+
+    /// Queues `task` to be woken up when the event loop suspend.
+    pub(crate) fn queue_suspend_task(&mut self, task: TaskId) {
+        self.pending_suspend.push(task);
+    }
+
+    /// Dequeues all tasks waiting for suspend, returning them as an iterator.
+    fn drain_suspend_tasks(&mut self) -> impl Iterator<Item = TaskId> {
+        mem::replace(&mut self.pending_suspend, Vec::with_capacity(4)).into_iter()
     }
 
     /// Arms `task` to be awoken when `window` receives an event.

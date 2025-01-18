@@ -50,6 +50,10 @@ pub fn resumed() -> future::ResumedFuture {
     future::ResumedFuture::new()
 }
 
+pub fn suspended() -> future::SuspendedFuture {
+    future::SuspendedFuture::new()
+}
+
 pub fn create_window(attrs: WindowAttributes) -> Result<Window, OsError> {
     with_current_rt(|rt| {
         rt.event_loop().create_window(attrs)
