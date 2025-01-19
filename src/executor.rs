@@ -1,13 +1,9 @@
 use std::{
-    cell::{Cell, RefCell},
-    future::{Future, IntoFuture},
-    mem::{self, ManuallyDrop},
-    rc::Rc,
-    task::{Context, Poll},
+    any::Any, cell::{Cell, RefCell}, future::{Future, IntoFuture}, mem::{self, ManuallyDrop}, rc::Rc, task::{Context, Poll}
 };
 
 use ahash::AHashMap;
-use futures::{future::LocalBoxFuture, FutureExt as _};
+use futures::{channel::oneshot::Sender, future::LocalBoxFuture, FutureExt as _};
 use slotmap::HopSlotMap;
 use winit::{
     application::ApplicationHandler,
@@ -16,7 +12,7 @@ use winit::{
     window::WindowId,
 };
 
-use crate::{context::RuntimeGuard, waker::id_waker};
+use crate::{context::RuntimeGuard, task::{Task, TaskId}, waker::el_waker};
 
 pub(crate) type ReturnHandle<T> = Rc<RefCell<Option<T>>>;
 pub(crate) type CopyReturnHandle<T> = Rc<Cell<Option<T>>>;
@@ -30,7 +26,7 @@ pub(crate) struct Executor {
     pending: HopSlotMap<TaskId, Task>,
     /// Queues that tasks may place themselves on
     /// to be woken up
-    queues: ExecutorQueues,
+    shared: ExecutorShared,
 }
 
 impl Executor {
@@ -46,7 +42,7 @@ impl Executor {
             proxy: event_loop.create_proxy(),
             main_task: MainTask::from_into_future(future_src),
             pending: HopSlotMap::with_key(),
-            queues: ExecutorQueues::new(),
+            shared: ExecutorShared::new(),
         }
     }
 
@@ -60,16 +56,16 @@ impl Executor {
             }
             MainTask::Running(id) => return *id,
         };
-        let main_id = self.pending.insert(Task { future: task_gen() });
+        let main_id = self.pending.insert(Task::main_task(task_gen()));
         self.main_task = MainTask::Running(main_id);
         main_id
     }
 
     /// Polls the task with the given ID.
     fn poll_task(&mut self, id: TaskId, event_loop: &ActiveEventLoop) {
-        let _rt_guard = RuntimeGuard::with(event_loop, &mut self.queues);
+        let _rt_guard = RuntimeGuard::with(event_loop, &mut self.shared);
 
-        let waker = id_waker(&self.proxy, id);
+        let waker = el_waker(&self.proxy, id);
         let mut context = Context::from_waker(&waker);
 
         match self.pending[id].poll(&mut context) {
@@ -98,15 +94,15 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        self.queues.set_resumed(true);
-        for id in self.queues.drain_resume_tasks() {
+        self.shared.set_resumed(true);
+        for id in self.shared.drain_resume_tasks() {
             self.poll_task(id, event_loop);
         }
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
-        self.queues.set_resumed(false);
-        for id in self.queues.drain_suspend_tasks() {
+        self.shared.set_resumed(false);
+        for id in self.shared.drain_suspend_tasks() {
             self.poll_task(id, event_loop);
         }
     }
@@ -118,7 +114,7 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
         event: WindowEvent,
     ) {
         // Poll the task waiting on this event
-        if let Some((id, handle)) = self.queues.trip_window_task(window_id) {
+        if let Some((id, handle)) = self.shared.trip_window_task(window_id) {
             *handle.borrow_mut() = Some(event);
             self.poll_task(id, event_loop);
         }
@@ -129,16 +125,12 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
             ExecutorEvent::Wake(id) => {
                 self.poll_task(id, event_loop);
             }
-            ExecutorEvent::New(task) => {
-                let id = self.pending.insert(task);
-                self.poll_task(id, event_loop);
-            }
         }
     }
 }
 
-/// Task queues for event-loop events.
-pub(crate) struct ExecutorQueues {
+/// Shared state of the executor that is indirectly exposed to futures.
+pub(crate) struct ExecutorShared {
     /// List of tasks waiting for the event loop to resume.
     pending_resume: Vec<TaskId>,
     /// List of tasks waiting for the event loop to suspend.
@@ -149,7 +141,7 @@ pub(crate) struct ExecutorQueues {
     is_resumed: bool,
 }
 
-impl ExecutorQueues {
+impl ExecutorShared {
     fn new() -> Self {
         Self {
             pending_resume: Vec::with_capacity(4),
@@ -214,28 +206,10 @@ impl ExecutorQueues {
     }
 }
 
-slotmap::new_key_type! {
-    pub(crate) struct TaskId;
-}
-
-/// Basic task struct: a toplevel task that can be polled for results.
-pub(crate) struct Task {
-    pub(crate) future: LocalBoxFuture<'static, ()>,
-}
-
-impl Task {
-    /// Polls the underlying future, feeding the results out where needed.
-    pub(crate) fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-        self.future.as_mut().poll(cx)
-    }
-}
-
 /// Events that may be passed to the executor.
 pub(crate) enum ExecutorEvent {
     /// A Waker was triggered for this task, poll it.
     Wake(TaskId),
-    /// A new task has been added to the queue.
-    New(Task),
 }
 
 /// State of the main execution task.

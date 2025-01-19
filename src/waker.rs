@@ -2,21 +2,21 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 
 use winit::event_loop::EventLoopProxy;
 
-use crate::executor::{ExecutorEvent, TaskId};
+use crate::{executor::ExecutorEvent, task::TaskId};
 
 
-/// Creates an event-loop waker for the given task.
-pub(crate) fn id_waker(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskId) -> Waker {
+/// Creates an event-loop waker for the given task ID.
+pub(crate) fn el_waker(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskId) -> Waker {
     let data = Box::new(EventLoopWakerData {
         proxy: proxy.clone(),
         id,
     });
-    unsafe { Waker::new(Box::into_raw(data) as *const (), &VTABLE) }
+    unsafe { Waker::new(Box::into_raw(data) as *const (), &ELW_VTABLE) }
 }
 
 /// Extracts the [`TaskId`] from a Waker, if it is an event-loop waker.
-pub(crate) fn extract_waker_id(waker: &Waker) -> Option<TaskId> {
-    if waker.vtable() != &VTABLE {
+pub(crate) fn waker_id_for(waker: &Waker) -> Option<TaskId> {
+    if waker.vtable() != &ELW_VTABLE {
         return None;
     }
     // SAFETY: this vtable will always be associated with this event waker.
@@ -35,7 +35,7 @@ unsafe fn elw_clone(this: *const ()) -> RawWaker {
     let this = &mut *(this as *mut EventLoopWakerData);
 
     let cloned = Box::new(this.clone());
-    RawWaker::new(Box::into_raw(cloned) as *const (), &VTABLE)
+    RawWaker::new(Box::into_raw(cloned) as *const (), &ELW_VTABLE)
 }
 
 unsafe fn elw_wake(this: *const ()) {
@@ -54,4 +54,4 @@ unsafe fn elw_drop(this: *const ()) {
     drop(Box::from_raw(this as *mut EventLoopWakerData));
 }
 
-static VTABLE: RawWakerVTable = RawWakerVTable::new(elw_clone, elw_wake, elw_wake_by_ref, elw_drop);
+static ELW_VTABLE: RawWakerVTable = RawWakerVTable::new(elw_clone, elw_wake, elw_wake_by_ref, elw_drop);

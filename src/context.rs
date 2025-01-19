@@ -2,11 +2,11 @@ use std::{cell::RefCell, marker::PhantomData, ptr::NonNull};
 
 use winit::event_loop::ActiveEventLoop;
 
-use crate::executor::{ExecutorQueues};
+use crate::executor::ExecutorShared;
 
 pub(crate) struct RuntimeContext {
     event_loop: NonNull<ActiveEventLoop>,
-    queues: NonNull<ExecutorQueues>
+    queues: NonNull<ExecutorShared>
 }
 
 impl RuntimeContext {
@@ -15,7 +15,7 @@ impl RuntimeContext {
         unsafe { self.event_loop.as_ref() }
     }
 
-    pub(crate) fn queues(&self) -> &mut ExecutorQueues {
+    pub(crate) fn queues(&self) -> &mut ExecutorShared {
         // SAFETY: the runtime guard will ensure this is valid.
         unsafe { &mut *(self.queues.as_ptr()) }
     }
@@ -39,7 +39,7 @@ pub(crate) fn with_current_rt<R, F: FnOnce(&RuntimeContext) -> R>(f: F) -> R {
 pub(crate) struct RuntimeGuard<'a>(PhantomData<&'a ()>);
 
 impl<'a> RuntimeGuard<'a> {
-    pub(crate) fn with(event_loop: &'a ActiveEventLoop, queues: &'a mut ExecutorQueues) -> Self {
+    pub(crate) fn with(event_loop: &'a ActiveEventLoop, queues: &'a mut ExecutorShared) -> Self {
         CURRENT_RT.with_borrow_mut(|current_rt| {
             if current_rt.is_some() {
                 panic!("Runtime context already active!");

@@ -9,9 +9,12 @@ use winit::{
 
 mod context;
 mod executor;
+mod task;
+mod waker;
+
 pub mod future;
 pub mod reexports;
-mod waker;
+pub mod window;
 
 
 pub struct Runtime {

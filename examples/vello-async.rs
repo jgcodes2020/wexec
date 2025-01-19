@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use vello::{
     kurbo::{Affine, Circle, Ellipse, Line, RoundedRect, Stroke}, peniko::Color, util::{RenderContext, RenderSurface}, wgpu, AaConfig, Renderer, RendererOptions, Scene
