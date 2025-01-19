@@ -1,6 +1,6 @@
 use std::{
     any::Any,
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::VecDeque,
     fmt::Debug,
     future::{Future, IntoFuture},
@@ -11,7 +11,7 @@ use std::{
 
 use ahash::AHashMap;
 use futures::{
-    channel::oneshot::{self, Sender},
+    channel::oneshot::{self},
     future::LocalBoxFuture,
     FutureExt as _,
 };
@@ -30,7 +30,7 @@ use crate::{
 };
 
 pub(crate) type ReturnHandle<T> = Rc<RefCell<Option<T>>>;
-pub(crate) type CopyReturnHandle<T> = Rc<Cell<Option<T>>>;
+// pub(crate) type CopyReturnHandle<T> = Rc<Cell<Option<T>>>;
 
 pub(crate) struct Executor {
     /// The state of the main task.

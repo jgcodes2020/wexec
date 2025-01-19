@@ -8,7 +8,7 @@ use std::{
 
 use futures::{
     channel::oneshot::{self, Canceled},
-    future::{BoxFuture, LocalBoxFuture},
+    future::LocalBoxFuture,
     FutureExt as _,
 };
 

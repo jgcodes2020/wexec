@@ -1,18 +1,12 @@
 use std::{
-    cell::{Cell, RefCell},
     future::Future,
     pin::Pin,
-    rc::Rc,
     task::{self, Poll},
 };
 
 use winit::{event::WindowEvent, window::WindowId};
 
-use crate::{
-    context::{self, with_current_rt},
-    executor::{CopyReturnHandle, ReturnHandle},
-    waker::waker_id_for,
-};
+use crate::{context::with_current_rt, executor::ReturnHandle, waker::waker_id_for};
 
 macro_rules! assert_event_loop {
     () => {
