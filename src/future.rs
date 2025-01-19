@@ -16,7 +16,7 @@ use crate::{
 
 macro_rules! assert_event_loop {
     () => {
-        debug_assert!(
+        assert!(
             crate::context::is_main_thread(),
             "event-loop futures should not be registered outside the event loop"
         );
@@ -51,7 +51,7 @@ impl Future for WindowEventFuture {
                 };
                 let return_handle = self.handle.clone();
                 with_current_rt(move |rt| {
-                    rt.queues()
+                    rt.shared()
                         .arm_window_task(self.window_id, task_id, return_handle);
                 });
                 Poll::Pending
@@ -73,7 +73,7 @@ impl Future for ResumedFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let resumed = with_current_rt(|rt| rt.queues().is_resumed());
+        let resumed = with_current_rt(|rt| rt.shared().is_resumed());
         match resumed {
             true => Poll::Ready(()),
             false => {
@@ -82,7 +82,7 @@ impl Future for ResumedFuture {
                     None => panic!("Only main-thread futures may wait for suspend events"),
                 };
                 with_current_rt(move |rt| {
-                    rt.queues().queue_resume_task(task_id);
+                    rt.shared().queue_resume_task(task_id);
                 });
                 Poll::Pending
             }
@@ -103,7 +103,7 @@ impl Future for SuspendedFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        let resumed = with_current_rt(|rt| rt.queues().is_resumed());
+        let resumed = with_current_rt(|rt| rt.shared().is_resumed());
         match resumed {
             false => Poll::Ready(()),
             true => {
@@ -112,7 +112,7 @@ impl Future for SuspendedFuture {
                     None => panic!("Only main-thread futures may wait for resume events"),
                 };
                 with_current_rt(move |rt| {
-                    rt.queues().queue_suspend_task(task_id);
+                    rt.shared().queue_suspend_task(task_id);
                 });
                 Poll::Pending
             }

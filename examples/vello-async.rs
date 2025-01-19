@@ -1,7 +1,10 @@
 use std::num::NonZeroUsize;
 
 use vello::{
-    kurbo::{Affine, Circle, Ellipse, Line, RoundedRect, Stroke}, peniko::Color, util::{RenderContext, RenderSurface}, wgpu, AaConfig, Renderer, RendererOptions, Scene
+    kurbo::{Affine, Circle, Ellipse, Line, RoundedRect, Stroke},
+    peniko::Color,
+    util::{RenderContext, RenderSurface},
+    wgpu, AaConfig, Renderer, RendererOptions, Scene,
 };
 use wexec::Runtime;
 use winit::{dpi::LogicalSize, event::WindowEvent, window::Window};
@@ -41,8 +44,7 @@ async fn main2() {
 
             // Resize the surface when the window is resized
             WindowEvent::Resized(size) => {
-                context
-                    .resize_surface(&mut surface, size.width, size.height);
+                context.resize_surface(&mut surface, size.width, size.height);
             }
 
             // This is where all the rendering happens
@@ -95,7 +97,7 @@ async fn main2() {
     }
 }
 
-/// Helper function that creates a Winit window and returns it (wrapped in an Arc for sharing between threads)
+/// Helper function that creates a Winit window and returns it
 fn create_winit_window() -> Window {
     let attr = Window::default_attributes()
         .with_inner_size(LogicalSize::new(1044, 800))

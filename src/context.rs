@@ -6,7 +6,7 @@ use crate::executor::ExecutorShared;
 
 pub(crate) struct RuntimeContext {
     event_loop: NonNull<ActiveEventLoop>,
-    queues: NonNull<ExecutorShared>
+    queues: NonNull<ExecutorShared>,
 }
 
 impl RuntimeContext {
@@ -15,7 +15,7 @@ impl RuntimeContext {
         unsafe { self.event_loop.as_ref() }
     }
 
-    pub(crate) fn queues(&self) -> &mut ExecutorShared {
+    pub(crate) fn shared(&self) -> &mut ExecutorShared {
         // SAFETY: the runtime guard will ensure this is valid.
         unsafe { &mut *(self.queues.as_ptr()) }
     }
@@ -49,7 +49,7 @@ impl<'a> RuntimeGuard<'a> {
             // we're guaranteed they have a stable address.
             *current_rt = Some(RuntimeContext {
                 event_loop: NonNull::from(event_loop),
-                queues: NonNull::from(queues)
+                queues: NonNull::from(queues),
             });
         });
 

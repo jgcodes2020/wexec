@@ -1,9 +1,20 @@
 use std::{
-    any::Any, cell::{Cell, RefCell}, future::{Future, IntoFuture}, mem::{self, ManuallyDrop}, rc::Rc, task::{Context, Poll}
+    any::Any,
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    fmt::Debug,
+    future::{Future, IntoFuture},
+    mem::{self, ManuallyDrop},
+    rc::Rc,
+    task::{Context, Poll},
 };
 
 use ahash::AHashMap;
-use futures::{channel::oneshot::Sender, future::LocalBoxFuture, FutureExt as _};
+use futures::{
+    channel::oneshot::{self, Sender},
+    future::LocalBoxFuture,
+    FutureExt as _,
+};
 use slotmap::HopSlotMap;
 use winit::{
     application::ApplicationHandler,
@@ -12,20 +23,21 @@ use winit::{
     window::WindowId,
 };
 
-use crate::{context::RuntimeGuard, task::{Task, TaskId}, waker::el_waker};
+use crate::{
+    context::RuntimeGuard,
+    task::{LocalTask, SendTask, Task, TaskId},
+    waker::el_waker,
+};
 
 pub(crate) type ReturnHandle<T> = Rc<RefCell<Option<T>>>;
 pub(crate) type CopyReturnHandle<T> = Rc<Cell<Option<T>>>;
 
 pub(crate) struct Executor {
-    /// Event loop proxy, used for waking tasks.
-    proxy: EventLoopProxy<ExecutorEvent>,
     /// The state of the main task.
     main_task: MainTask,
     /// Container for all pending tasks.
     pending: HopSlotMap<TaskId, Task>,
-    /// Queues that tasks may place themselves on
-    /// to be woken up
+    /// Shared state between the executor
     shared: ExecutorShared,
 }
 
@@ -39,10 +51,9 @@ impl Executor {
         Fut: Future<Output = ()> + 'static,
     {
         Self {
-            proxy: event_loop.create_proxy(),
             main_task: MainTask::from_into_future(future_src),
             pending: HopSlotMap::with_key(),
-            shared: ExecutorShared::new(),
+            shared: ExecutorShared::new(event_loop.create_proxy()),
         }
     }
 
@@ -56,19 +67,21 @@ impl Executor {
             }
             MainTask::Running(id) => return *id,
         };
-        let main_id = self.pending.insert(Task::main_task(task_gen()));
+        let main_id = self.pending.insert(LocalTask::main_task(task_gen()).into());
         self.main_task = MainTask::Running(main_id);
         main_id
     }
 
     /// Polls the task with the given ID.
     fn poll_task(&mut self, id: TaskId, event_loop: &ActiveEventLoop) {
-        let _rt_guard = RuntimeGuard::with(event_loop, &mut self.shared);
-
-        let waker = el_waker(&self.proxy, id);
+        let waker = el_waker(&self.shared.proxy, id);
         let mut context = Context::from_waker(&waker);
 
-        match self.pending[id].poll(&mut context) {
+        match {
+            // setup runtime context and poll the task
+            let _rt_guard = RuntimeGuard::with(event_loop, &mut self.shared);
+            self.pending[id].poll(&mut context)
+        } {
             Poll::Ready(_) => {
                 self.pending.remove(id);
                 // the event loop shuts down when the main task completes
@@ -122,31 +135,54 @@ impl ApplicationHandler<ExecutorEvent> for Executor {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ExecutorEvent) {
         match event {
-            ExecutorEvent::Wake(id) => {
+            ExecutorEvent::Wake { id } => {
+                self.poll_task(id, event_loop);
+            }
+            ExecutorEvent::NewSend {
+                future_src,
+                on_ready,
+            } => {
+                let task: Task = SendTask::new(future_src(), Some(on_ready)).into();
+                let id = self.pending.insert(task);
+                self.poll_task(id, event_loop);
+            }
+            ExecutorEvent::NewLocal => {
+                let task: Task = self.shared.next_spawn_task().into();
+                let id = self.pending.insert(task);
                 self.poll_task(id, event_loop);
             }
         }
     }
 }
 
+const BASE_CAPACITY: usize = 4;
+
 /// Shared state of the executor that is indirectly exposed to futures.
 pub(crate) struct ExecutorShared {
+    /// Event loop proxy, used for waking tasks.
+    proxy: EventLoopProxy<ExecutorEvent>,
     /// List of tasks waiting for the event loop to resume.
-    pending_resume: Vec<TaskId>,
+    /// These are all simultaneously dequeued once a resume occurs.
+    resume_queue: Vec<TaskId>,
     /// List of tasks waiting for the event loop to suspend.
-    pending_suspend: Vec<TaskId>,
-    /// Map of all tasks waiting for a window event.
-    pending_window: AHashMap<WindowId, (TaskId, ReturnHandle<WindowEvent>)>,
+    /// These are all simultaneously dequeued once a suspend occurs.
+    suspend_queue: Vec<TaskId>,
+    /// Map of tasks waiting for a window event, by ID. Only one task per window.
+    window_event_queue: AHashMap<WindowId, (TaskId, ReturnHandle<WindowEvent>)>,
+    /// Queue of tasks spawned locally on the event queue.
+    spawn_queue: VecDeque<LocalTask>,
     /// True when the event loop resumes.
     is_resumed: bool,
 }
 
 impl ExecutorShared {
-    fn new() -> Self {
+    fn new(proxy: EventLoopProxy<ExecutorEvent>) -> Self {
         Self {
-            pending_resume: Vec::with_capacity(4),
-            pending_suspend: Vec::with_capacity(4),
-            pending_window: AHashMap::with_capacity(4),
+            proxy,
+            resume_queue: Vec::with_capacity(BASE_CAPACITY),
+            suspend_queue: Vec::with_capacity(BASE_CAPACITY),
+            window_event_queue: AHashMap::with_capacity(BASE_CAPACITY),
+            spawn_queue: VecDeque::with_capacity(BASE_CAPACITY),
             is_resumed: false,
         }
     }
@@ -161,22 +197,22 @@ impl ExecutorShared {
 
     /// Queues `task` to be woken up when the event loop resumes.
     pub(crate) fn queue_resume_task(&mut self, task: TaskId) {
-        self.pending_resume.push(task);
+        self.resume_queue.push(task);
     }
 
     /// Dequeues all tasks waiting for resume, returning them as an iterator.
     fn drain_resume_tasks(&mut self) -> impl Iterator<Item = TaskId> {
-        mem::replace(&mut self.pending_resume, Vec::with_capacity(4)).into_iter()
+        mem::replace(&mut self.resume_queue, Vec::with_capacity(BASE_CAPACITY)).into_iter()
     }
 
     /// Queues `task` to be woken up when the event loop suspend.
     pub(crate) fn queue_suspend_task(&mut self, task: TaskId) {
-        self.pending_suspend.push(task);
+        self.suspend_queue.push(task);
     }
 
     /// Dequeues all tasks waiting for suspend, returning them as an iterator.
     fn drain_suspend_tasks(&mut self) -> impl Iterator<Item = TaskId> {
-        mem::replace(&mut self.pending_suspend, Vec::with_capacity(4)).into_iter()
+        mem::replace(&mut self.suspend_queue, Vec::with_capacity(BASE_CAPACITY)).into_iter()
     }
 
     /// Arms `task` to be awoken when `window` receives an event.
@@ -188,7 +224,7 @@ impl ExecutorShared {
         handle: ReturnHandle<WindowEvent>,
     ) {
         let mut insert_succeeded: bool = false;
-        self.pending_window.entry(window).or_insert_with(|| {
+        self.window_event_queue.entry(window).or_insert_with(|| {
             insert_succeeded = true;
             (task, handle)
         });
@@ -202,15 +238,61 @@ impl ExecutorShared {
         &mut self,
         window: WindowId,
     ) -> Option<(TaskId, ReturnHandle<WindowEvent>)> {
-        self.pending_window.remove(&window)
+        self.window_event_queue.remove(&window)
+    }
+
+    /// Clones an [`EventLoopProxy`] that can be used to submit events to the main thread.
+    pub(crate) fn clone_proxy(&self) -> EventLoopProxy<ExecutorEvent> {
+        self.proxy.clone()
+    }
+
+    /// Queues a local task to spawn on the event loop.
+    pub(crate) fn queue_spawn_task(&mut self, task: LocalTask) {
+        self.spawn_queue.push_back(task);
+        self.proxy
+            .send_event(ExecutorEvent::NewLocal)
+            .expect("Event loop should be running");
+    }
+
+    /// Dequeues all local tasks to be spawned, returning them as an iterator.
+    fn next_spawn_task(&mut self) -> LocalTask {
+        self.spawn_queue.pop_front().unwrap()
     }
 }
 
-/// Events that may be passed to the executor.
+/// Events that may be passed to the executor from outside the event loop.
 pub(crate) enum ExecutorEvent {
-    /// A Waker was triggered for this task, poll it.
-    Wake(TaskId),
+    /// A waker was tripped.
+    Wake {
+        /// The ID of the task that needs to be polled.
+        id: TaskId,
+    },
+    /// A new task was submitted to the runtime.
+    NewSend {
+        /// A function returning the task's future.
+        future_src: Box<dyn FnOnce() -> LocalBoxFuture<'static, Box<dyn Any + Send>> + Send>,
+        /// A one-shot sender to return the result to.
+        on_ready: oneshot::Sender<Box<dyn Any + Send>>,
+    },
+    /// A new local task was submitted to the runtime.
+    NewLocal,
 }
+
+impl Debug for ExecutorEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Wake { id } => f.debug_struct("Wake").field("id", id).finish(),
+            Self::NewSend { .. } => f.debug_struct("NewSend").finish_non_exhaustive(),
+            Self::NewLocal => f.write_str("NewLocal"),
+        }
+    }
+}
+
+const _: () = {
+    // sanity check: ExecutorEvent should be Send + 'static
+    const fn test<T: Send + 'static>() {}
+    test::<ExecutorEvent>();
+};
 
 /// State of the main execution task.
 enum MainTask {

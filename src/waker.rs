@@ -4,7 +4,6 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::{executor::ExecutorEvent, task::TaskId};
 
-
 /// Creates an event-loop waker for the given task ID.
 pub(crate) fn el_waker(proxy: &EventLoopProxy<ExecutorEvent>, id: TaskId) -> Waker {
     let data = Box::new(EventLoopWakerData {
@@ -46,7 +45,7 @@ unsafe fn elw_wake(this: *const ()) {
 unsafe fn elw_wake_by_ref(this: *const ()) {
     // SAFETY: `this` will always be a valid pointer to EventLoopWakerData.
     let this = &mut *(this as *mut EventLoopWakerData);
-    let _ = this.proxy.send_event(ExecutorEvent::Wake(this.id));
+    let _ = this.proxy.send_event(ExecutorEvent::Wake { id: this.id });
 }
 
 unsafe fn elw_drop(this: *const ()) {
@@ -54,4 +53,5 @@ unsafe fn elw_drop(this: *const ()) {
     drop(Box::from_raw(this as *mut EventLoopWakerData));
 }
 
-static ELW_VTABLE: RawWakerVTable = RawWakerVTable::new(elw_clone, elw_wake, elw_wake_by_ref, elw_drop);
+static ELW_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(elw_clone, elw_wake, elw_wake_by_ref, elw_drop);
