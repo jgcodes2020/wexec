@@ -1,8 +1,8 @@
-use std::{cell::RefCell, marker::PhantomData, ptr::NonNull};
+use std::{cell::RefCell, marker::PhantomData, ptr::NonNull, sync::OnceLock};
 
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 
-use crate::executor::ExecutorShared;
+use crate::executor::{ExecutorEvent, ExecutorShared};
 
 pub(crate) struct RuntimeContext {
     event_loop: NonNull<ActiveEventLoop>,
@@ -25,6 +25,8 @@ thread_local! {
     static CURRENT_RT: RefCell<Option<RuntimeContext>> = RefCell::new(None);
 }
 
+static CURRENT_PROXY: OnceLock<EventLoopProxy<ExecutorEvent>> = OnceLock::new();
+
 pub(crate) fn is_main_thread() -> bool {
     CURRENT_RT.with_borrow(|value| value.is_some())
 }
@@ -34,6 +36,14 @@ pub(crate) fn with_current_rt<R, F: FnOnce(&RuntimeContext) -> R>(f: F) -> R {
         Some(rt) => f(rt),
         None => panic!("Not running on the main thread"),
     })
+}
+
+pub(crate) fn init_proxy(proxy: EventLoopProxy<ExecutorEvent>) {
+    CURRENT_PROXY.set(proxy).expect("Unexpected event loop recreation!");
+}
+
+pub(crate) fn get_proxy() -> &'static EventLoopProxy<ExecutorEvent> {
+    CURRENT_PROXY.get().expect("Main thread has not been started yet!")
 }
 
 pub(crate) struct RuntimeGuard<'a>(PhantomData<&'a ()>);

@@ -3,7 +3,7 @@ use std::{
     future::{Future, IntoFuture},
 };
 
-use context::with_current_rt;
+use context::{get_proxy, with_current_rt};
 use executor::{Executor, ExecutorEvent};
 use futures::{channel::oneshot, FutureExt as _};
 use winit::{
@@ -14,11 +14,12 @@ use winit::{
 
 mod context;
 mod executor;
+mod task;
 mod waker;
 
+pub mod error;
 pub mod future;
 pub mod reexports;
-pub mod task;
 pub mod window;
 
 pub struct Runtime {
@@ -64,16 +65,16 @@ pub fn create_window(attrs: WindowAttributes) -> Result<Window, OsError> {
 /// creating any windows.
 ///
 /// # Panics
-/// This function panics if called outside the main thread.
+/// This function panics if called outside the event loop.
 #[must_use = "This is a future and should be `.await`ed"]
 pub fn resumed() -> future::ResumedFuture {
     future::ResumedFuture::new()
 }
 
-/// Waits until the event loop suspends. If the event loop is already suspends, returns immediately.
+/// Waits until the event loop suspends. If the event loop is already suspended, returns immediately.
 ///
 /// # Panics
-/// This function panics if called outside the main thread.
+/// This function panics if called outside the event loop.
 #[must_use = "This is a future and should be `.await`ed"]
 pub fn suspended() -> future::SuspendedFuture {
     future::SuspendedFuture::new()
@@ -83,76 +84,49 @@ pub fn suspended() -> future::SuspendedFuture {
 ///
 /// # Panics
 /// This function panics:
-/// - if called outside the main thread
+/// - if called outside the event loop
 /// - if another future is already waiting on this window ID.
 #[must_use = "This is a future and should be `.await`ed"]
 pub fn window_event(window_id: WindowId) -> future::WindowEventFuture {
     future::WindowEventFuture::new(window_id)
 }
 
-/// An external handle to the `wexec`/`winit` runtime.
-/// This handle may be cloned freely.
-#[derive(Debug, Clone)]
-pub struct RuntimeHandle {
-    proxy: EventLoopProxy<ExecutorEvent>,
+/// Spawns a future onto the event loop. This is the recommended way to interact with
+/// winit [`Window`]s. Because this function may be called from any thread, all data
+/// passing in and out of this function must be [`Send`].
+pub fn spawn<R, IntoFut, Fut>(into_future: IntoFut) -> future::SendJoinHandle<R>
+where
+    R: Send + 'static,
+    IntoFut: IntoFuture<Output = R, IntoFuture = Fut> + Send + 'static,
+    Fut: Future<Output = R> + 'static,
+{
+    let proxy = get_proxy();
+    let (on_ready, recv) = oneshot::channel();
+
+    let future_src = Box::new(move || {
+        into_future
+            .into_future()
+            .map(|x| -> Box<dyn Any + Send> { Box::new(x) })
+            .boxed_local()
+    });
+
+    proxy
+        .send_event(ExecutorEvent::NewSend {
+            future_src,
+            on_ready,
+        })
+        .expect("RuntimeHandle::spawn may only be called when the event loop is alive");
+
+    future::SendJoinHandle::new(recv)
 }
 
-const _: () = {
-    // RuntimeHandle guarantees Send
-    const fn check_send<T: Send + 'static>() {}
-    check_send::<RuntimeHandle>();
-};
-
-impl RuntimeHandle {
-    /// Spawns a future onto the event loop. Because [`RuntimeHandle`] is expected
-    /// to be used outside the event loop, the [`IntoFuture`] passed to this function
-    /// must be [`Send`].
-    ///
-    /// # Panics
-    /// This function panics if the event loop is already shut down.
-    pub fn spawn<R, IntoFut, Fut>(&self, into_future: IntoFut) -> task::SendJoinHandle<R>
-    where
-        R: Send + 'static,
-        IntoFut: IntoFuture<Output = R, IntoFuture = Fut> + Send + 'static,
-        Fut: Future<Output = R> + 'static,
-    {
-        let (on_ready, recv) = oneshot::channel();
-
-        let future_src = Box::new(move || {
-            into_future
-                .into_future()
-                .map(|x| -> Box<dyn Any + Send> { Box::new(x) })
-                .boxed_local()
-        });
-
-        self.proxy
-            .send_event(ExecutorEvent::NewSend {
-                future_src,
-                on_ready,
-            })
-            .expect("RuntimeHandle::spawn may only be called when the event loop is alive");
-
-        task::SendJoinHandle::new(recv)
-    }
-}
-
-/// Obtains a handle to the runtime, which may be used to spawn futures from other threads.
-///
-/// # Panics
-/// This function panics if the event loop is already shut down.
-pub fn get_handle() -> RuntimeHandle {
-    with_current_rt(|rt| RuntimeHandle {
-        proxy: rt.shared().clone_proxy(),
-    })
-}
-
-/// Spawns a future onto the event loop. Unlike [`RuntimeHandle::spawn`], this function
-/// allows non-[`Send`] futures. This function, therefore, can only be called from
-/// within the main trhead.
+/// Spawns a future onto the event loop. Unlike [`spawn`], this function
+/// allows non-[`Send`] futures, but it can only be called from within the
+/// event loop.
 ///
 /// # Panics
 /// This function panics if called from outside the event loop.
-pub fn spawn_local<R, IntoFut, Fut>(into_future: IntoFut) -> task::JoinHandle<R>
+pub fn spawn_local<R, IntoFut, Fut>(into_future: IntoFut) -> future::JoinHandle<R>
 where
     R: 'static,
     IntoFut: IntoFuture<Output = R, IntoFuture = Fut> + 'static,
@@ -167,7 +141,7 @@ where
                 .boxed_local(),
             Some(on_ready),
         );
-        let join_handle = task::JoinHandle::new(recv);
+        let join_handle = future::JoinHandle::new(recv);
         rt.shared().queue_spawn_task(task);
         join_handle
     })

@@ -6,7 +6,7 @@ use vello::{
     util::{RenderContext, RenderSurface},
     wgpu, AaConfig, Renderer, RendererOptions, Scene,
 };
-use wexec::Runtime;
+use wexec::{window::WinitWindowExt, Runtime};
 use winit::{dpi::LogicalSize, event::WindowEvent, window::Window};
 
 fn main() {
@@ -38,7 +38,7 @@ async fn main2() {
     renderers[surface.dev_id].get_or_insert_with(|| create_vello_renderer(&context, &surface));
 
     loop {
-        match wexec::window_event(window.id()).await {
+        match window.next_event().await {
             // Exit the event loop when a close is requested (e.g. window's close button is pressed)
             WindowEvent::CloseRequested => return,
 
