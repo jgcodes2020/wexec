@@ -17,6 +17,7 @@ mod executor;
 mod task;
 mod waker;
 
+pub mod platform;
 pub mod error;
 pub mod future;
 pub mod reexports;
