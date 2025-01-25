@@ -24,7 +24,7 @@ use winit::{
 };
 
 use crate::{
-    context::RuntimeGuard,
+    context::{self, RuntimeGuard},
     task::{LocalTask, SendTask, Task, TaskId},
     waker::el_waker,
 };
@@ -50,10 +50,13 @@ impl Executor {
         IntoFut: IntoFuture<Output = (), IntoFuture = Fut> + 'static,
         Fut: Future<Output = ()> + 'static,
     {
+        let proxy = event_loop.create_proxy();
+        context::init_proxy(proxy.clone());
+
         Self {
             main_task: MainTask::from_into_future(future_src),
             pending: HopSlotMap::with_key(),
-            shared: ExecutorShared::new(event_loop.create_proxy()),
+            shared: ExecutorShared::new(proxy),
         }
     }
 
@@ -239,11 +242,6 @@ impl ExecutorShared {
         window: WindowId,
     ) -> Option<(TaskId, ReturnHandle<WindowEvent>)> {
         self.window_event_queue.remove(&window)
-    }
-
-    /// Clones an [`EventLoopProxy`] that can be used to submit events to the main thread.
-    pub(crate) fn clone_proxy(&self) -> EventLoopProxy<ExecutorEvent> {
-        self.proxy.clone()
     }
 
     /// Queues a local task to spawn on the event loop.
